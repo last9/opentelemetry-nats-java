@@ -1,8 +1,8 @@
 package io.last9.otel.nats;
 
 import io.last9.otel.nats.helper.NatsHeadersSetter;
+import io.last9.otel.nats.helper.NatsSpanHelper;
 import io.nats.client.Connection;
-import io.nats.client.api.ServerInfo;
 import io.nats.client.impl.Headers;
 import io.opentelemetry.api.GlobalOpenTelemetry;
 import io.opentelemetry.api.trace.Span;
@@ -70,35 +70,16 @@ public class NatsConnectionInstrumentation implements TypeInstrumentation {
                     .setAttribute("messaging.message.body.size", data != null ? (long) data.length : 0L)
                     .setAttribute("network.transport", "tcp");
 
-            // server.address/port from the connected URL (not ServerInfo.getHost which is the bind address)
-            // getConnectedUrl() returns e.g. "nats://nats:4222"
-            String connectedUrl = connection.getConnectedUrl();
-            if (connectedUrl != null) {
-                try {
-                    java.net.URI uri = new java.net.URI(connectedUrl);
-                    String host = uri.getHost();
-                    if (host != null && !host.isEmpty()) {
-                        builder.setAttribute("server.address", host);
-                    }
-                    int port = uri.getPort();
-                    if (port > 0) {
-                        builder.setAttribute("server.port", (long) port);
-                    }
-                } catch (Exception ignored) { /* malformed URI — skip */ }
-            }
-            ServerInfo info = connection.getServerInfo();
-            if (info != null) {
-                builder.setAttribute("messaging.client.id", String.valueOf(info.getClientId()));
-            }
+            NatsSpanHelper.applyConnectionAttributes(builder, connection);
 
             span = builder.startSpan();
             scope = span.makeCurrent();
 
-            // Create headers if the publish call didn't include any
+            // readOnly = false on the headers arg lets ByteBuddy write the new value
+            // back into publishInternal's local variable before the method body runs
             if (headers == null) {
                 headers = new Headers();
             }
-            // Inject traceparent/tracestate so the subscriber can link its span
             GlobalOpenTelemetry.getPropagators()
                     .getTextMapPropagator()
                     .inject(Context.current(), headers, NatsHeadersSetter.INSTANCE);

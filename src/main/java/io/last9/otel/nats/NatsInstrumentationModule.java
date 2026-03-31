@@ -57,6 +57,7 @@ public class NatsInstrumentationModule extends InstrumentationModule {
         return Arrays.asList(
                 "io.last9.otel.nats.helper.NatsHeadersGetter",
                 "io.last9.otel.nats.helper.NatsHeadersSetter",
+                "io.last9.otel.nats.helper.NatsSpanHelper",
                 "io.last9.otel.nats.helper.TracingMessageHandler"
         );
     }

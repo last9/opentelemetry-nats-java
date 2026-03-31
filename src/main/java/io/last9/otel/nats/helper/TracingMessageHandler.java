@@ -1,14 +1,13 @@
 package io.last9.otel.nats.helper;
 
-import io.nats.client.Connection;
 import io.nats.client.Message;
 import io.nats.client.MessageHandler;
-import io.nats.client.api.ServerInfo;
 import io.opentelemetry.api.GlobalOpenTelemetry;
 import io.opentelemetry.api.trace.Span;
 import io.opentelemetry.api.trace.SpanBuilder;
 import io.opentelemetry.api.trace.SpanKind;
 import io.opentelemetry.api.trace.StatusCode;
+import io.opentelemetry.api.trace.Tracer;
 import io.opentelemetry.context.Context;
 import io.opentelemetry.context.Scope;
 
@@ -26,6 +25,8 @@ import io.opentelemetry.context.Scope;
  */
 public class TracingMessageHandler implements MessageHandler {
 
+    private static final Tracer TRACER = GlobalOpenTelemetry.getTracer("io.last9.otel.nats");
+
     private final MessageHandler delegate;
 
     public TracingMessageHandler(MessageHandler delegate) {
@@ -41,7 +42,7 @@ public class TracingMessageHandler implements MessageHandler {
         String subject = msg.getSubject();
         byte[] body = msg.getData();
 
-        SpanBuilder builder = GlobalOpenTelemetry.getTracer("io.last9.otel.nats")
+        SpanBuilder builder = TRACER
                 .spanBuilder(subject + " process")
                 .setSpanKind(SpanKind.CONSUMER)
                 .setParent(parentContext)
@@ -52,28 +53,7 @@ public class TracingMessageHandler implements MessageHandler {
                 .setAttribute("messaging.message.body.size", body != null ? (long) body.length : 0L)
                 .setAttribute("network.transport", "tcp");
 
-        // server.address/port from the connected URL (not ServerInfo.getHost which is the bind address)
-        Connection connection = msg.getConnection();
-        if (connection != null) {
-            String connectedUrl = connection.getConnectedUrl();
-            if (connectedUrl != null) {
-                try {
-                    java.net.URI uri = new java.net.URI(connectedUrl);
-                    String host = uri.getHost();
-                    if (host != null && !host.isEmpty()) {
-                        builder.setAttribute("server.address", host);
-                    }
-                    int port = uri.getPort();
-                    if (port > 0) {
-                        builder.setAttribute("server.port", (long) port);
-                    }
-                } catch (Exception ignored) { /* malformed URI — skip */ }
-            }
-            ServerInfo info = connection.getServerInfo();
-            if (info != null) {
-                builder.setAttribute("messaging.client.id", String.valueOf(info.getClientId()));
-            }
-        }
+        NatsSpanHelper.applyConnectionAttributes(builder, msg.getConnection());
 
         Span span = builder.startSpan();
         try (Scope ignored = span.makeCurrent()) {
