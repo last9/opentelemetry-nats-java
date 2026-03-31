@@ -1,10 +1,14 @@
 package io.last9.otel.nats;
 
 import io.last9.otel.nats.helper.NatsHeadersSetter;
+import io.nats.client.Connection;
+import io.nats.client.api.ServerInfo;
 import io.nats.client.impl.Headers;
 import io.opentelemetry.api.GlobalOpenTelemetry;
 import io.opentelemetry.api.trace.Span;
+import io.opentelemetry.api.trace.SpanBuilder;
 import io.opentelemetry.api.trace.SpanKind;
+import io.opentelemetry.api.trace.StatusCode;
 import io.opentelemetry.context.Context;
 import io.opentelemetry.context.Scope;
 import io.opentelemetry.javaagent.extension.instrumentation.TypeInstrumentation;
@@ -17,18 +21,14 @@ import static net.bytebuddy.matcher.ElementMatchers.*;
 
 /**
  * Instruments NatsConnection.publishInternal() — the single chokepoint for all
- * five publish overloads in the NATS Java client.
+ * publish overloads in the NATS Java client (jnats 2.20.4 signature: 6 args).
  *
- * What this does:
- *  1. Starts a PRODUCER span with messaging semantic convention attributes
- *  2. Injects W3C traceparent/tracestate into the outgoing message headers
- *     so the consumer can link its span back to this one
- *  3. Records exceptions and ends the span on exit
- *
- * Header injection trick: publishInternal takes a @Nullable Headers parameter.
- * Using @Advice.Argument(readOnly = false), we can create a new Headers instance
- * when the argument is null and write it back into the method's local variable
- * before the method body executes.
+ * Produces a PRODUCER span per OTel messaging semantic conventions with:
+ *  - messaging.system, messaging.destination.name, messaging.operation.*
+ *  - messaging.message.body.size, messaging.client.id
+ *  - server.address, server.port, network.transport
+ *  - W3C traceparent injected into outgoing headers (creates a new Headers if null)
+ *  - error.type on exception
  */
 public class NatsConnectionInstrumentation implements TypeInstrumentation {
 
@@ -41,7 +41,7 @@ public class NatsConnectionInstrumentation implements TypeInstrumentation {
     public void transform(TypeTransformer typeTransformer) {
         typeTransformer.applyAdviceToMethod(
                 named("publishInternal")
-                        .and(takesArguments(5))
+                        .and(takesArguments(6))
                         .and(takesArgument(0, String.class))
                         .and(takesArgument(2, named("io.nats.client.impl.Headers"))),
                 NatsConnectionInstrumentation.class.getName() + "$PublishAdvice");
@@ -52,21 +52,46 @@ public class NatsConnectionInstrumentation implements TypeInstrumentation {
 
         @Advice.OnMethodEnter(suppress = Throwable.class)
         public static void onEnter(
+                @Advice.This Connection connection,
                 @Advice.Argument(value = 0) String subject,
                 @Advice.Argument(value = 2, readOnly = false) Headers headers,
+                @Advice.Argument(value = 3) byte[] data,
                 @Advice.Local("otelSpan") Span span,
                 @Advice.Local("otelScope") Scope scope) {
 
-            Context parentContext = Context.current();
-
-            span = GlobalOpenTelemetry.getTracer("io.last9.otel.nats")
+            SpanBuilder builder = GlobalOpenTelemetry.getTracer("io.last9.otel.nats")
                     .spanBuilder(subject + " publish")
                     .setSpanKind(SpanKind.PRODUCER)
-                    .setParent(parentContext)
+                    .setParent(Context.current())
                     .setAttribute("messaging.system", "nats")
-                    .setAttribute("messaging.destination", subject)
-                    .setAttribute("messaging.operation", "publish")
-                    .startSpan();
+                    .setAttribute("messaging.destination.name", subject)
+                    .setAttribute("messaging.operation.type", "publish")
+                    .setAttribute("messaging.operation.name", "publish")
+                    .setAttribute("messaging.message.body.size", data != null ? (long) data.length : 0L)
+                    .setAttribute("network.transport", "tcp");
+
+            // server.address/port from the connected URL (not ServerInfo.getHost which is the bind address)
+            // getConnectedUrl() returns e.g. "nats://nats:4222"
+            String connectedUrl = connection.getConnectedUrl();
+            if (connectedUrl != null) {
+                try {
+                    java.net.URI uri = new java.net.URI(connectedUrl);
+                    String host = uri.getHost();
+                    if (host != null && !host.isEmpty()) {
+                        builder.setAttribute("server.address", host);
+                    }
+                    int port = uri.getPort();
+                    if (port > 0) {
+                        builder.setAttribute("server.port", (long) port);
+                    }
+                } catch (Exception ignored) { /* malformed URI — skip */ }
+            }
+            ServerInfo info = connection.getServerInfo();
+            if (info != null) {
+                builder.setAttribute("messaging.client.id", String.valueOf(info.getClientId()));
+            }
+
+            span = builder.startSpan();
             scope = span.makeCurrent();
 
             // Create headers if the publish call didn't include any
@@ -91,6 +116,8 @@ public class NatsConnectionInstrumentation implements TypeInstrumentation {
             if (span != null) {
                 if (thrown != null) {
                     span.recordException(thrown);
+                    span.setStatus(StatusCode.ERROR, thrown.getClass().getName());
+                    span.setAttribute("error.type", thrown.getClass().getName());
                 }
                 span.end();
             }

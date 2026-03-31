@@ -1,12 +1,7 @@
 package io.last9.otel.nats;
 
-import io.last9.otel.nats.helper.NatsHeadersGetter;
-import io.nats.client.Message;
-import io.opentelemetry.api.GlobalOpenTelemetry;
-import io.opentelemetry.api.trace.Span;
-import io.opentelemetry.api.trace.SpanKind;
-import io.opentelemetry.context.Context;
-import io.opentelemetry.context.Scope;
+import io.last9.otel.nats.helper.TracingMessageHandler;
+import io.nats.client.MessageHandler;
 import io.opentelemetry.javaagent.extension.instrumentation.TypeInstrumentation;
 import io.opentelemetry.javaagent.extension.instrumentation.TypeTransformer;
 import net.bytebuddy.asm.Advice;
@@ -16,78 +11,55 @@ import net.bytebuddy.matcher.ElementMatcher;
 import static net.bytebuddy.matcher.ElementMatchers.*;
 
 /**
- * Instruments all concrete implementations of io.nats.client.MessageHandler.onMessage().
+ * Instruments NatsConnection.createDispatcher(MessageHandler) to wrap the handler
+ * with a TracingMessageHandler before it is stored in the NatsDispatcher.
  *
- * What this does:
- *  1. Extracts W3C trace context from incoming message headers
- *  2. Starts a CONSUMER span parented to the extracted context (linking this
- *     span back to the publisher's trace)
- *  3. Records exceptions and ends the span on exit
+ * Why not instrument MessageHandler.onMessage() directly?
+ * Java 15+ compiles lambdas to hidden classes via LambdaMetafactory. Hidden classes
+ * bypass the Java agent's class-load-time transformation hook — ByteBuddy never sees
+ * them. hasSuperType("MessageHandler") silently matches nothing for lambda handlers.
  *
- * Note: inbound NATS message headers are read-only (frozen after calculate()).
- * We only read them here — never write.
+ * Why not instrument the NatsDispatcher constructor?
+ * @Advice.Argument(readOnly = false) on constructors has JVM-level restrictions around
+ * the super() call sequence that make it unreliable for field assignment.
+ *
+ * The fix: intercept createDispatcher(MessageHandler) — a plain instance method on
+ * NatsConnection. @Advice.OnMethodEnter with readOnly=false replaces the MessageHandler
+ * argument before the method body runs. The method then creates NatsDispatcher with the
+ * already-wrapped handler, so every subsequent onMessage() call goes through our
+ * concrete TracingMessageHandler class.
  */
 public class NatsMessageHandlerInstrumentation implements TypeInstrumentation {
 
     @Override
     public ElementMatcher<TypeDescription> typeMatcher() {
-        // Match all concrete implementations of the MessageHandler functional interface.
-        // isInterface() exclusion prevents ByteBuddy from attempting to transform the
-        // interface declaration itself (which has no method body to advise).
-        return hasSuperType(named("io.nats.client.MessageHandler"))
-                .and(not(isInterface()));
+        return named("io.nats.client.impl.NatsConnection");
     }
 
     @Override
     public void transform(TypeTransformer typeTransformer) {
         typeTransformer.applyAdviceToMethod(
-                named("onMessage").and(takesArguments(1)),
-                NatsMessageHandlerInstrumentation.class.getName() + "$OnMessageAdvice");
+                named("createDispatcher")
+                        .and(takesArguments(1))
+                        .and(takesArgument(0, named("io.nats.client.MessageHandler"))),
+                NatsMessageHandlerInstrumentation.class.getName() + "$CreateDispatcherAdvice");
     }
 
     @SuppressWarnings("unused")
-    public static class OnMessageAdvice {
+    public static class CreateDispatcherAdvice {
 
+        /**
+         * Fires before createDispatcher(handler) runs. Replaces the raw MessageHandler
+         * (which may be a lambda hidden class) with a TracingMessageHandler wrapper.
+         * The method then creates NatsDispatcher(connection, wrappedHandler), storing
+         * the wrapper as the defaultHandler for all future onMessage() calls.
+         */
         @Advice.OnMethodEnter(suppress = Throwable.class)
         public static void onEnter(
-                @Advice.Argument(0) Message message,
-                @Advice.Local("otelSpan") Span span,
-                @Advice.Local("otelScope") Scope scope) {
+                @Advice.Argument(value = 0, readOnly = false) MessageHandler handler) {
 
-            // Extract upstream trace context from message headers.
-            // If no headers are present (e.g. publisher not instrumented), this
-            // returns the current context unchanged — span still created, just unlinked.
-            Context parentContext = GlobalOpenTelemetry.getPropagators()
-                    .getTextMapPropagator()
-                    .extract(Context.current(), message, NatsHeadersGetter.INSTANCE);
-
-            String subject = message.getSubject();
-
-            span = GlobalOpenTelemetry.getTracer("io.last9.otel.nats")
-                    .spanBuilder(subject + " process")
-                    .setSpanKind(SpanKind.CONSUMER)
-                    .setParent(parentContext)
-                    .setAttribute("messaging.system", "nats")
-                    .setAttribute("messaging.destination", subject)
-                    .setAttribute("messaging.operation", "process")
-                    .startSpan();
-            scope = span.makeCurrent();
-        }
-
-        @Advice.OnMethodExit(onThrowable = Throwable.class, suppress = Throwable.class)
-        public static void onExit(
-                @Advice.Local("otelSpan") Span span,
-                @Advice.Local("otelScope") Scope scope,
-                @Advice.Thrown Throwable thrown) {
-
-            if (scope != null) {
-                scope.close();
-            }
-            if (span != null) {
-                if (thrown != null) {
-                    span.recordException(thrown);
-                }
-                span.end();
+            if (handler != null && !(handler instanceof TracingMessageHandler)) {
+                handler = new TracingMessageHandler(handler);
             }
         }
     }

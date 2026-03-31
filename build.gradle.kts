@@ -46,6 +46,9 @@ dependencies {
     compileOnly("com.google.auto.service:auto-service-annotations:1.1.1")
     annotationProcessor("com.google.auto.service:auto-service:1.1.1")
 
+    // JSR-305 @Nullable — compileOnly, not needed at runtime
+    compileOnly("com.google.code.findbugs:jsr305:3.0.2")
+
     // Unit tests
     testImplementation("org.junit.jupiter:junit-jupiter:5.10.2")
     testImplementation("io.nats:jnats:2.20.4")
