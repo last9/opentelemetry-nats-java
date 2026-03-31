@@ -64,9 +64,9 @@ export OTEL_EXPORTER_OTLP_PROTOCOL="http/protobuf"
 
 The Java agent loads this JAR via SPI (`META-INF/services/InstrumentationModule`) at startup. ByteBuddy then intercepts two points:
 
-**Publish side** — `NatsConnection.publishInternal()` is the single method all five publish overloads funnel through. Advice is inlined before and after it: start a PRODUCER span, inject `traceparent` into the headers (creating a `Headers` object if the call didn't include one), end the span on exit.
+**Publish side** — `NatsConnection.publishInternal()` is the single chokepoint all five publish overloads funnel through. Advice fires before and after: start a PRODUCER span, inject `traceparent` into the headers (creating a `Headers` object if the call didn't include one), end the span on exit.
 
-**Subscribe side** — Java 15+ compiles lambda message handlers to hidden classes that ByteBuddy cannot intercept at class-load time. The fix: intercept `NatsConnection.createDispatcher(MessageHandler)` before the method body runs, wrap the raw handler in a `TracingMessageHandler`, and let the dispatcher store the wrapper. Every subsequent `onMessage()` call goes through our concrete class, which extracts the upstream trace context and creates a CONSUMER span.
+**Subscribe side** — Java 15+ compiles lambda message handlers to hidden classes via `LambdaMetafactory`. Hidden classes bypass the agent's class-load-time hook entirely — ByteBuddy never sees them. The fix: intercept `NatsConnection.createDispatcher(MessageHandler)` before the method body runs, wrap the raw handler in a `TracingMessageHandler`, and let the dispatcher store the wrapper. Every subsequent `onMessage()` call goes through our concrete class, which extracts upstream trace context and creates a CONSUMER span.
 
 ```
 NatsInstrumentationModule            loaded via SPI
@@ -75,9 +75,10 @@ NatsInstrumentationModule            loaded via SPI
 │   └── createDispatcher()           → wraps handler in TracingMessageHandler
 │
 helper/
+├── NatsSpanHelper                   shared server attribute extraction
 ├── NatsHeadersSetter                TextMapSetter — writes traceparent into Headers
 ├── NatsHeadersGetter                TextMapGetter — reads traceparent from Message
 └── TracingMessageHandler            wraps any MessageHandler with CONSUMER span logic
 ```
 
-Helper classes are injected into the app classloader via `getAdditionalHelperClassNames()` so they're accessible from the inlined Advice bytecode.
+Helper classes are injected into the app classloader via `getAdditionalHelperClassNames()` so they're accessible from the inlined Advice bytecode and from `TracingMessageHandler` at runtime.
