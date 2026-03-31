@@ -17,6 +17,19 @@ repositories {
 
 val otelVersion = "1.44.0"
 val otelAgentVersion = "2.10.0-alpha"
+val testcontainersVersion = "1.19.7"
+
+// Integration test source set — separate from unit tests, needs a live NATS server
+sourceSets {
+    create("integrationTest") {
+        compileClasspath += sourceSets.main.get().output
+        runtimeClasspath += sourceSets.main.get().output
+    }
+}
+
+val integrationTestImplementation by configurations.getting {
+    extendsFrom(configurations.implementation.get())
+}
 
 dependencies {
     // OTel API + extension API — compileOnly, provided by the agent at runtime
@@ -33,7 +46,7 @@ dependencies {
     compileOnly("com.google.auto.service:auto-service-annotations:1.1.1")
     annotationProcessor("com.google.auto.service:auto-service:1.1.1")
 
-    // Tests
+    // Unit tests
     testImplementation("org.junit.jupiter:junit-jupiter:5.10.2")
     testImplementation("io.nats:jnats:2.20.4")
     testImplementation("io.opentelemetry:opentelemetry-api:$otelVersion")
@@ -41,6 +54,19 @@ dependencies {
     testImplementation("io.opentelemetry:opentelemetry-sdk-testing:$otelVersion")
     testImplementation("io.opentelemetry.javaagent:opentelemetry-javaagent-extension-api:$otelAgentVersion")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
+
+    // Integration tests — full deps (no compileOnly) for programmatic ByteBuddy + Testcontainers
+    integrationTestImplementation("org.junit.jupiter:junit-jupiter:5.10.2")
+    integrationTestImplementation("org.testcontainers:testcontainers:$testcontainersVersion")
+    integrationTestImplementation("org.testcontainers:junit-jupiter:$testcontainersVersion")
+    integrationTestImplementation("io.nats:jnats:2.20.4")
+    integrationTestImplementation("net.bytebuddy:byte-buddy:1.14.18")
+    integrationTestImplementation("net.bytebuddy:byte-buddy-agent:1.14.18")
+    integrationTestImplementation("io.opentelemetry:opentelemetry-api:$otelVersion")
+    integrationTestImplementation("io.opentelemetry:opentelemetry-sdk:$otelVersion")
+    integrationTestImplementation("io.opentelemetry:opentelemetry-sdk-testing:$otelVersion")
+    integrationTestImplementation("io.opentelemetry.javaagent:opentelemetry-javaagent-extension-api:$otelAgentVersion")
+    configurations["integrationTestRuntimeOnly"]("org.junit.platform:junit-platform-launcher")
 }
 
 tasks {
@@ -49,14 +75,12 @@ tasks {
     }
 
     shadowJar {
-        // The extension JAR must NOT bundle OTel or ByteBuddy — the agent provides them
         dependencies {
             exclude(dependency("io.opentelemetry:.*"))
             exclude(dependency("io.opentelemetry.javaagent:.*"))
             exclude(dependency("net.bytebuddy:.*"))
             exclude(dependency("com.google.auto.service:.*"))
         }
-        // No classifier — the shadow JAR is the primary artifact
         archiveClassifier.set("")
     }
 
@@ -67,4 +91,17 @@ tasks {
     test {
         useJUnitPlatform()
     }
+}
+
+// Integration test task — runs against live NATS via Testcontainers
+// ByteBuddyAgent.install() requires -Djdk.attach.allowAttachSelf=true
+tasks.register<Test>("integrationTest") {
+    description = "Runs integration tests with live NATS via Testcontainers"
+    group = "verification"
+
+    testClassesDirs = sourceSets["integrationTest"].output.classesDirs
+    classpath = sourceSets["integrationTest"].runtimeClasspath
+
+    jvmArgs("-Djdk.attach.allowAttachSelf=true")
+    useJUnitPlatform()
 }
