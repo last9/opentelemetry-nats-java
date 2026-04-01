@@ -1,9 +1,10 @@
 plugins {
     java
     id("com.gradleup.shadow") version "8.3.5"
+    id("com.vanniktech.maven.publish") version "0.29.0"
 }
 
-group = "io.last9.otel"
+group = "io.last9"
 version = "0.1.0"
 
 java {
@@ -107,4 +108,34 @@ tasks.register<Test>("integrationTest") {
 
     jvmArgs("-Djdk.attach.allowAttachSelf=true")
     useJUnitPlatform()
+}
+
+mavenPublishing {
+    publishToMavenCentral(com.vanniktech.maven.publish.SonatypeHost.CENTRAL_PORTAL, automaticRelease = true)
+    signAllPublications()
+
+    pom {
+        name.set("opentelemetry-nats-java")
+        description.set("OTel Java agent extension for NATS auto-instrumentation — zero code changes, full messaging semconv")
+        url.set("https://github.com/last9/opentelemetry-nats-java")
+        licenses {
+            license {
+                name.set("MIT License")
+                url.set("https://opensource.org/licenses/MIT")
+            }
+        }
+        developers {
+            developer {
+                name.set("Last9")
+                email.set("support@last9.io")
+                organization.set("Last9")
+                organizationUrl.set("https://last9.io")
+            }
+        }
+        scm {
+            connection.set("scm:git:git://github.com/last9/opentelemetry-nats-java.git")
+            developerConnection.set("scm:git:ssh://github.com:last9/opentelemetry-nats-java.git")
+            url.set("https://github.com/last9/opentelemetry-nats-java")
+        }
+    }
 }
