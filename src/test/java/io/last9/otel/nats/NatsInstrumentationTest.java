@@ -6,6 +6,7 @@ import io.nats.client.impl.Headers;
 import io.opentelemetry.api.trace.Span;
 import io.opentelemetry.api.trace.SpanKind;
 import io.opentelemetry.context.Context;
+import io.opentelemetry.context.Scope;
 import io.opentelemetry.sdk.testing.junit5.OpenTelemetryExtension;
 import io.opentelemetry.sdk.trace.data.SpanData;
 import org.junit.jupiter.api.Test;
@@ -36,7 +37,7 @@ class NatsInstrumentationTest {
                 .setSpanKind(SpanKind.PRODUCER)
                 .startSpan();
 
-        try (var ignored = span.makeCurrent()) {
+        try (Scope ignored = span.makeCurrent()) {
             otelTesting.getOpenTelemetry()
                     .getPropagators()
                     .getTextMapPropagator()
