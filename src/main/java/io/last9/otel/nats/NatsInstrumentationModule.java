@@ -8,7 +8,7 @@ import net.bytebuddy.matcher.ElementMatcher;
 import java.util.Arrays;
 import java.util.List;
 
-import static net.bytebuddy.matcher.ElementMatchers.hasClassesNamed;
+import static io.opentelemetry.javaagent.extension.matcher.AgentElementMatchers.hasClassesNamed;
 
 /**
  * Entry point for the NATS auto-instrumentation extension.
@@ -41,12 +41,25 @@ public class NatsInstrumentationModule extends InstrumentationModule {
 
     /**
      * Declare helper classes that ByteBuddy must inject into the app classloader
-     * so Advice code can reference them. Any class referenced from an Advice
-     * inner class that lives in this extension JAR must be listed here.
+     * so Advice and wrapper code can reference them at runtime.
+     *
+     * isHelperClass() handles prefix-based matching. getAdditionalHelperClassNames()
+     * provides an explicit list for the agent's class injector — belt-and-suspenders
+     * for the TracingMessageHandler wrapper which is instantiated at method call time.
      */
     @Override
     public boolean isHelperClass(String className) {
         return className.startsWith("io.last9.otel.nats.helper.");
+    }
+
+    @Override
+    public List<String> getAdditionalHelperClassNames() {
+        return Arrays.asList(
+                "io.last9.otel.nats.helper.NatsHeadersGetter",
+                "io.last9.otel.nats.helper.NatsHeadersSetter",
+                "io.last9.otel.nats.helper.NatsSpanHelper",
+                "io.last9.otel.nats.helper.TracingMessageHandler"
+        );
     }
 
     @Override
