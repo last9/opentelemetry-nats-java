@@ -6,7 +6,7 @@ plugins {
 }
 
 group = "io.last9"
-version = "0.1.0-beta.1"
+version = "0.1.0"
 
 java {
     sourceCompatibility = JavaVersion.VERSION_1_8
