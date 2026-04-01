@@ -123,7 +123,7 @@ mavenPublishing {
 
     pom {
         name.set("opentelemetry-nats-java")
-        description.set("OTel Java agent extension for NATS auto-instrumentation — zero code changes, full messaging semconv")
+        description.set("Auto-instrumentation for NATS messaging in Java. Drop-in OpenTelemetry Java agent extension — zero code changes, full distributed traces with W3C context propagation.")
         url.set("https://github.com/last9/opentelemetry-nats-java")
         licenses {
             license {

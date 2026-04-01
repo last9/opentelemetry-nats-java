@@ -1,10 +1,16 @@
 # opentelemetry-nats-java
 
-The OTel Java agent doesn't instrument NATS. This extension does.
+[![Maven Central](https://img.shields.io/maven-central/v/io.last9/opentelemetry-nats-java)](https://central.sonatype.com/artifact/io.last9/opentelemetry-nats-java)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![Java 8+](https://img.shields.io/badge/Java-8%2B-blue)](https://openjdk.org/)
 
-Drop it next to the agent and every `connection.publish()` becomes a PRODUCER span, every message handler becomes a CONSUMER span, and W3C trace context propagates through message headers automatically. Zero code changes.
+**Auto-instrumentation for NATS in Java. No code changes. Full distributed traces.**
 
-## Installation
+The OpenTelemetry Java agent doesn't instrument NATS. This extension fixes that. Drop it next to the agent and every `publish()` gets a PRODUCER span, every message handler gets a CONSUMER span, and W3C trace context flows through message headers automatically.
+
+You get the full publish-to-subscribe path as a single distributed trace. That's it. That's the pitch.
+
+## Install
 
 **Gradle**
 
@@ -22,9 +28,9 @@ implementation("io.last9:opentelemetry-nats-java:0.1.0")
 </dependency>
 ```
 
-Or grab the JAR directly from [GitHub Releases](https://github.com/last9/opentelemetry-nats-java/releases).
+Or grab the JAR from [GitHub Releases](https://github.com/last9/opentelemetry-nats-java/releases).
 
-## Usage
+## Use it
 
 ```bash
 java \
@@ -34,7 +40,7 @@ java \
   -jar your-app.jar
 ```
 
-Point the exporter at your backend via standard OTel env vars:
+Point the exporter at your backend:
 
 ```bash
 export OTEL_EXPORTER_OTLP_ENDPOINT="https://otlp.last9.io"
@@ -42,25 +48,19 @@ export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Basic <your-credentials>"
 export OTEL_EXPORTER_OTLP_PROTOCOL="http/protobuf"
 ```
 
+To disable: `-Dotel.instrumentation.nats.enabled=false`
+
 ## What you get
 
-Every publish span carries `messaging.system`, `messaging.destination.name`, `messaging.operation.type`, `messaging.message.body.size`, `messaging.client.id`, `server.address`, `server.port`, and `network.transport`. Exceptions land on the span as `error.type`. PRODUCER and CONSUMER spans share a trace ID — you see the full publish→subscribe path as a single distributed trace.
-
-To disable at runtime: `-Dotel.instrumentation.nats.enabled=false`
-
-## Requirements
-
-- Java 11, 17, or 21 (bytecode targets Java 8+)
-- `io.nats:jnats` 2.2+
-- OpenTelemetry Java agent 2.x
+Every span carries the full messaging semantic conventions: `messaging.system`, `messaging.destination.name`, `messaging.operation.type`, `messaging.message.body.size`, `messaging.client.id`, `server.address`, `server.port`, and `network.transport`. Exceptions land as `error.type`. PRODUCER and CONSUMER spans share a trace ID.
 
 ## How it works
 
-The agent loads this JAR via SPI at startup. ByteBuddy then intercepts two points:
+The agent loads this JAR via SPI at startup. ByteBuddy intercepts two points:
 
-**Publish** — `NatsConnection.publishInternal()` is the single chokepoint all publish overloads funnel through. Advice starts a PRODUCER span on entry, injects `traceparent` into the headers (creating a `Headers` object if the call didn't include one), and ends the span on exit.
+**Publish** — `NatsConnection.publishInternal()` is the single chokepoint all publish overloads funnel through. Advice starts a PRODUCER span on entry, injects `traceparent` into the headers, and ends the span on exit.
 
-**Subscribe** — Java 15+ compiles lambda handlers to hidden classes via `LambdaMetafactory`. Hidden classes bypass the agent's class-load hook entirely — ByteBuddy never sees them. The fix: intercept `NatsConnection.createDispatcher(MessageHandler)`, wrap the raw handler in a `TracingMessageHandler`, and let the dispatcher store the wrapper. Every `onMessage()` call then goes through a concrete class that extracts upstream context and creates a CONSUMER span.
+**Subscribe** — Java 15+ compiles lambda handlers to hidden classes via `LambdaMetafactory`. Hidden classes bypass the agent's class-load hook — ByteBuddy never sees them. The fix: intercept `NatsConnection.createDispatcher(MessageHandler)`, wrap the handler in a `TracingMessageHandler`. Every `onMessage()` call then extracts upstream context and creates a CONSUMER span.
 
 ```
 NatsInstrumentationModule            loaded via SPI
@@ -70,16 +70,34 @@ NatsInstrumentationModule            loaded via SPI
 │
 helper/
 ├── NatsSpanHelper                   shared server attribute extraction
-├── NatsHeadersSetter                TextMapSetter — writes traceparent into Headers
-├── NatsHeadersGetter                TextMapGetter — reads traceparent from Message
-└── TracingMessageHandler            wraps any MessageHandler with CONSUMER span logic
+├── NatsHeadersSetter                writes traceparent into Headers
+├── NatsHeadersGetter                reads traceparent from Message
+└── TracingMessageHandler            wraps MessageHandler with CONSUMER span
 ```
 
-Helper classes are injected into the app classloader via `getAdditionalHelperClassNames()` so they're accessible from inlined Advice bytecode and from `TracingMessageHandler` at runtime.
+## Requirements
 
-## Building
+- Java 8+ (tested on 11, 17, 21)
+- `io.nats:jnats` 2.2+
+- OpenTelemetry Java agent 2.x
+
+## Build
 
 ```bash
 ./gradlew assemble
-# Output: build/libs/opentelemetry-nats-java-0.1.0.jar
+# → build/libs/opentelemetry-nats-java-0.1.0.jar
 ```
+
+## Contributing
+
+Contributions are welcome. Open an issue first for anything non-trivial.
+
+1. Fork the repo
+2. Create your branch (`git checkout -b my-change`)
+3. Make your changes and add tests
+4. Run `./gradlew test` and `./gradlew integrationTest`
+5. Open a pull request
+
+## License
+
+[MIT](LICENSE) — do whatever you want with it.
