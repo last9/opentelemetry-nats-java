@@ -2,6 +2,7 @@ plugins {
     java
     id("com.gradleup.shadow") version "8.3.5"
     id("com.vanniktech.maven.publish") version "0.29.0"
+    id("signing")
 }
 
 group = "io.last9"
@@ -110,9 +111,15 @@ tasks.register<Test>("integrationTest") {
     useJUnitPlatform()
 }
 
+afterEvaluate {
+    signing {
+        useGpgCmd()
+        sign(publishing.publications)
+    }
+}
+
 mavenPublishing {
     publishToMavenCentral(com.vanniktech.maven.publish.SonatypeHost.CENTRAL_PORTAL, automaticRelease = true)
-    signAllPublications()
 
     pom {
         name.set("opentelemetry-nats-java")
